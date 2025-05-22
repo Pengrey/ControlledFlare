@@ -12,10 +12,7 @@ Build and run the program:
 ```bash
 $ go build src/main.go
 $ ./main
-...
-$
 ```
-
 
 ### Tips
 Some tips for the results

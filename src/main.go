@@ -6,9 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"strconv"
 
 	"golang.org/x/exp/slices"
 
+	"github.com/tidwall/gjson"
+	"github.com/schollz/progressbar/v3"
 	"github.com/cloudflare/cloudflare-go/v4"
 	"github.com/cloudflare/cloudflare-go/v4/option"
 	"github.com/cloudflare/cloudflare-go/v4/zones"
@@ -54,14 +57,29 @@ func main() {
 		option.WithAPIKey(os.Getenv("CLOUDFLARE_API_TOKEN")),
 	)
 
+	// Fetch Number of Zones 
+	zone, err := client.Zones.List(context.Background(), zones.ZoneListParams{})
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// scuffed usage of undocumented functions cuz cloudflare doesnt provide a better way 
+	// (https://github.com/cloudflare/cloudflare-go/issues/4161)
+	number_of_zone, err := strconv.ParseInt(gjson.Get(zone.ResultInfo.JSON.RawJSON(), "total_count").String(), 10, 64)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// Progress bar
+	bar := progressbar.Default(number_of_zone)
+
 	// Fetch Zones
 	zone_iter := client.Zones.ListAutoPaging(context.Background(), zones.ZoneListParams{})
 
 	// Automatically fetches more pages as needed.
 	for zone_iter.Next() {
+		// Get zone
 		zone := zone_iter.Current()
-		// Print zone id
-		fmt.Printf("Name: %s", zone.Name)
 
 		// Set to store the unique IPs
 		ips := []string{}
@@ -73,6 +91,7 @@ func main() {
 			records, err := client.DNS.Records.List(context.Background(), dns.RecordListParams{
 				ZoneID: cloudflare.F(zone.ID),
 				Type: cloudflare.F(recordType),
+				Proxied: cloudflare.Bool(true),
 			})
 			if err != nil {
 				panic(err.Error())
@@ -87,9 +106,6 @@ func main() {
 			}
 		}
 
-		// Print resulting set
-		fmt.Printf(", IPs: %v\n", ips)
-
 		// For each Ip in the set
 		for _, ip := range ips {
 			// Increment the WaitGroup counter
@@ -98,6 +114,9 @@ func main() {
 			// Go routines goes brrrr
 			go pingHost(zone.Name, ip, &wg, arq)
 		}
+
+		// Update progress bar
+		bar.Add(1)
 	}
 	if err := zone_iter.Err(); err != nil {
 		panic(err.Error())
